@@ -171,7 +171,22 @@ boolean WiFiManager::autoConnect(char const *apName, char const *apPassword) {
 
   // attempt to connect; should it fail, fall back to AP
   WiFi.mode(WIFI_STA);
-
+  //如果自定义参数为空，则直接启动ap模式
+  DEBUG_WM("-------------------------------------------------------");
+  if(_params!=NULL){
+	  for(int i=0;i<_paramsCount;i++){
+		  String pv=_params[i]->getValue();
+		  DEBUG_WM("_params[]:"+pv);
+		  if(pv.length()==0){
+			  //trying to fix connection in progress hanging
+			  ETS_UART_INTR_DISABLE();
+			  wifi_station_disconnect();
+			  ETS_UART_INTR_ENABLE();
+			  return startConfigPortal(apName, apPassword);
+		  }
+	  }
+	  
+  }
   if (connectWifi("", "") == WL_CONNECTED)   {
     DEBUG_WM(F("IP Address:"));
     DEBUG_WM(WiFi.localIP());

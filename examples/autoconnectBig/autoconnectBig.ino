@@ -7,59 +7,131 @@
     上的代码进行调整，修复了部分bug，解决了断线重连问题，此代码可以直接烧入到nodemcu模块，分享代码希望对大家有帮助
 */
 #include <FS.h>                   //this needs to be first, or it all crashes and burns...
-
 #include <ESP8266WiFi.h>          //https://github.com/esp8266/Arduino
-
 //needed for library
 #include <DNSServer.h>
 #include <ESP8266WebServer.h>
 #include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager
-
 #include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
 #include <aJSON.h>
+
 //define your default values here, if there are different values in config.json, they are overwritten.
 char device_id[10]="";
 char api_key[20] = "";
-String DEVICEID=""; // 你的设备编号   ==
+String DEVICEID=""; // 你的设备编号==
 String  APIKEY = ""; // 设备密码==
 //flag for saving data
 bool shouldSaveConfig = false;
 
 unsigned long lastCheckInTime = 0; //记录上次报到时间
 const unsigned long postingInterval = 40000; // 每隔40秒向服务器报到一次
-
+unsigned long firstLoginTime = 0; //记录第一次登录时间
 const char* host = "www.bigiot.net";
 const int httpPort = 8181;
-bool isOffline=false;//是否掉线，用来记录是否掉线，掉线之后重新连接需要注销账户再登录 {"M":"checkout","ID":"xx1","K":"xx2"}\n
+bool isOffline=false;//是否掉线，用来记录是否掉线，掉线之后重新连接需要注销账户再登录 
+int login_status=false;//登录状态，0未登录 1已登录 2登录失败
 int pins[4] = {D5,D6,D7,D8};
 int state[4] = {HIGH,HIGH,HIGH,HIGH};
 int arr_len = sizeof(pins)/sizeof(pins[0]);
-
-//callback notifying us of the need to save config
-void saveConfigCallback () {
-  Serial.println("Should save config");
-  shouldSaveConfig = true;
-}
-
+String filepath="/config.json";
 
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);
   delay(1000);
-  Serial.println();
+  Serial.println("\n\u7a0b\u5e8f\u521d\u59cb\u5316....");
   
   //clean FS, for testing
+  //格式化文件系统，如果打开此句，则每次启动都需要重新配网
   //SPIFFS.format();
 
-  //read configuration from FS json
+  //读取配置文件中的设备id和apikey
+  initReadFile();
+  Serial.println("read config file:\ndevice_id.length:");
+  Serial.println(strlen(device_id));
+  initAutoConnect();
+  for(int i=0;i<strlen(device_id);i++){
+    DEVICEID += device_id[i];
+    }
+  for(int i=0;i<strlen(api_key);i++){
+  APIKEY += api_key[i];
+  }
+  DEVICEID.trim();
+  APIKEY.trim();
+  Serial.println("connected ... read config file:\nDEVICEID:"+DEVICEID+",APIKEY:"+APIKEY);
+  //默认输出关闭电频
+  for(int i=0;i<arr_len;i++){
+    pinMode(pins[i], OUTPUT);
+    digitalWrite(pins[i], state[i]);
+  }
+}
+WiFiClient client;
+void loop() {
+  //Serial.println("DEVICEID:"+DEVICEID+",APIKEY:"+APIKEY);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print(".");
+    isOffline=true;
+  }
+  // Use WiFiClient class to create TCP connections
+  while (!client.connected()) {
+    if (!client.connect(host, httpPort)) {
+      Serial.println("connection failed");
+      delay(5000);
+      return;
+    }
+    Serial.println("connection bigiot succeed");
+    delay(2000);
+  }
+  if(isOffline){
+    isOffline=false;
+    //如果之前掉过线 则先发送一次注销
+    Serial.println("mandatory checkOut");
+    checkOut();
+    delay(2000);
+    checkIn();
+  }
+  if(millis()-firstLoginTime>20)
+    login_status=2;
+  if(login_status==0){
+    checkOut();
+    delay(1000);
+    checkIn();
+    firstLoginTime=millis();
+    }
+  if(millis() - lastCheckInTime > postingInterval || lastCheckInTime==0) {
+    checkIn();
+  }
+  
+  // Read all the lines of the reply from server and print them to Serial
+  if (client.available()) {
+    String inputString = client.readStringUntil('\n');
+    inputString.trim();
+    Serial.println(inputString);
+    int len = inputString.length()+1;
+    if(inputString.startsWith("{") && inputString.endsWith("}")){
+      char jsonString[len];
+      inputString.toCharArray(jsonString,len);
+      aJsonObject *msg = aJson.parse(jsonString);
+      processMessage(msg);
+      aJson.deleteItem(msg);          
+    }
+  }
+}
+//callback notifying us of the need to save config
+void saveConfigCallback () {
+  Serial.println("Should save config");
+  shouldSaveConfig = true;
+}
+void initReadFile(){
+   //read configuration from FS json
   Serial.println("mounting FS...");
-
-  if (SPIFFS.begin()) {
+    if (SPIFFS.begin()) {
     Serial.println("mounted file system");
-    if (SPIFFS.exists("/config1.json")) {
+    if (SPIFFS.exists(filepath)) {
       //file exists, reading and loading
       Serial.println("reading config file");
-      File configFile = SPIFFS.open("/config1.json", "r");
+      File configFile = SPIFFS.open(filepath, "r");
       if (configFile) {
         Serial.println("opened config file");
         size_t size = configFile.size();
@@ -86,14 +158,13 @@ void setup() {
     Serial.println("failed to mount FS");
   }
   //end read
-
-
-
+  }
+void initAutoConnect(){
   // The extra parameters to be configured (can be either global or just in the setup)
   // After connecting, parameter.getValue() will get you the configured value
   // id/name placeholder/prompt default length
-  WiFiManagerParameter custom_device_id("server", "device id", device_id, 10);
-  WiFiManagerParameter custom_api_key("port", "api key", api_key, 20);
+  WiFiManagerParameter custom_device_id("device_id", "\u8d1d\u58f3\u8bbe\u5907 ID", device_id, 10);
+  WiFiManagerParameter custom_api_key("api_key", "\u8d1d\u58f3\u8bbe\u5907 APIKEY", api_key, 20);
 
   //WiFiManager
   //Local intialization. Once its business is done, there is no need to keep it around
@@ -122,7 +193,7 @@ void setup() {
   //sets timeout until configuration portal gets turned off
   //useful to make it all retry or go to sleep
   //in seconds
-  wifiManager.setTimeout(60);
+  wifiManager.setTimeout(30);
 
   //fetches ssid and pass and tries to connect
   //if it does not connect it starts an access point with the specified name
@@ -151,7 +222,7 @@ void setup() {
     json["device_id"] = device_id;
     json["api_key"] = api_key;
 
-    File configFile = SPIFFS.open("/config.json1", "w");
+    File configFile = SPIFFS.open(filepath, "w");
     if (!configFile) {
       Serial.println("failed to open config file for writing");
     }
@@ -161,67 +232,9 @@ void setup() {
     configFile.close();
     //end save
   }
-
-  Serial.println("local ip");
+  Serial.println("\nlocal ip");
   Serial.println(WiFi.localIP());
-  for(int i=0;i<10;i++){
-    DEVICEID += device_id[i];
-    }
-    for(int i=0;i<20;i++){
-    APIKEY += api_key[i];
-    }
-    DEVICEID.trim();
-    APIKEY.trim();
-    Serial.println("DEVICEID:"+DEVICEID+",APIKEY:"+APIKEY);
-  //默认输出关闭电频
-  for(int i=0;i<arr_len;i++){
-    pinMode(pins[i], OUTPUT);
-    digitalWrite(pins[i], state[i]);
   }
-}
-WiFiClient client;
-void loop() {
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.print(".");
-    isOffline=true;
-  }
-if(isOffline){
-  isOffline=false;
-  //如果之前掉过线 则先发送一次注销
-  checkOut();
-  delay(2000);
-  checkIn();
-  }
-  // Use WiFiClient class to create TCP connections
-  while (!client.connected()) {
-    if (!client.connect(host, httpPort)) {
-      Serial.println("connection failed");
-      delay(5000);
-      return;
-    }
-  }
-
-  if(millis() - lastCheckInTime > postingInterval || lastCheckInTime==0) {
-    checkIn();
-  }
-  
-  // Read all the lines of the reply from server and print them to Serial
-  if (client.available()) {
-    String inputString = client.readStringUntil('\n');
-    inputString.trim();
-    Serial.println(inputString);
-    int len = inputString.length()+1;
-    if(inputString.startsWith("{") && inputString.endsWith("}")){
-      char jsonString[len];
-      inputString.toCharArray(jsonString,len);
-      aJsonObject *msg = aJson.parse(jsonString);
-      processMessage(msg);
-      aJson.deleteItem(msg);          
-    }
-  }
-}
-
 void processMessage(aJsonObject *msg){
   aJsonObject* method = aJson.getObjectItem(msg, "M");
   aJsonObject* content = aJson.getObjectItem(msg, "C");     
@@ -255,6 +268,8 @@ void processMessage(aJsonObject *msg){
         sayToClient(F_C_ID,"LED pin:"+pin); 
       }
     }
+    else if(M=="checkinok")
+     login_status=1;
 }
 
 void checkIn() {
