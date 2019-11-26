@@ -78,41 +78,17 @@ void loop() {
   // Use WiFiClient class to create TCP connections
   while (!client.connected()) {
     if (!client.connect(host, httpPort)) {
-      Serial.println("connection failed");
+      Serial.println("tcp client connection failed");
       delay(5000);
       return;
     }
-    Serial.println("connection bigiot succeed");
+    Serial.println("tcp client connection bigiot succeed");
     delay(2000);
   }
-  if(isOffline){
-    isOffline=false;
-    //如果之前掉过线 则先发送一次注销
-    Serial.println("mandatory checkOut");
-    checkOut();
-    delay(2000);
-    checkIn();
-  }
-  if(login_status==1&&millis()-first_login_time>20000){
-    //登录超过20秒还未成功，则登录失败，删除原先配置
-    login_status=3;
-    cleanConfigFile();
-    }
-  if(login_status==0){
-    login_status=1;
-    Serial.println("first login");
-    checkOut();
-    delay(1000);
-    checkIn();
-    delay(1000);
-    first_login_time=millis();
-    lastCheckInTime=millis();
-    }
-    if(login_status==1&&millis() - lastCheckInTime >5000){
-      //首次登录后，每5s发送一次登录指令
-      checkIn();
-      lastCheckInTime=millis();
-      }
+  offlineConnect();
+  loginFail();
+  firstLogin();//首次启动模块登录贝壳
+  tryLogin();//尝试5s登录一次
   if(millis() - lastCheckInTime > postingInterval || lastCheckInTime==0) {
     checkIn();
   }
@@ -132,6 +108,42 @@ void loop() {
     }
   }
 }
+void firstLogin(){
+    if(login_status==0){
+    login_status=1;
+    Serial.println("first login");
+    checkOut();
+    delay(1000);
+    checkIn();
+    delay(1000);
+    first_login_time=millis();
+    lastCheckInTime=millis();
+    }
+  }
+void tryLogin(){
+      if(login_status==1&&millis() - lastCheckInTime >5000){
+      //首次登录后，每5s发送一次登录指令
+      checkIn();
+      lastCheckInTime=millis();
+      }
+  }
+void offlineConnect(){
+    if(isOffline){
+    isOffline=false;
+    //如果之前掉过线 则先发送一次注销
+    Serial.println("mandatory checkOut");
+    checkOut();
+    delay(2000);
+    checkIn();
+  }
+  }
+void loginFail(){
+  if(login_status==1&&millis()-first_login_time>20000){
+    //登录超过20秒还未成功，则登录失败，删除原先配置
+    login_status=3;
+    cleanConfigFile();
+    }
+  }  
 //callback notifying us of the need to save config
 void saveConfigCallback () {
   Serial.println("Should save config");
