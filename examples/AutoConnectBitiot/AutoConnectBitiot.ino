@@ -5,7 +5,7 @@
     我的继电器默认高电频关闭，所以在初始化时都初始化为高电频，play关闭开启，stop关闭关闭，输入1-4打开或关闭对应的引脚
     代码基于https://github.com/bigiot/bigiotArduino/blob/master/examples/ESP8266/kaiguan/kaiguan.ino
     上的代码进行调整，修复了部分bug，解决了断线重连问题，此代码可以直接烧入到nodemcu模块，分享代码希望对大家有帮助
-    本例子依赖的库：ArduinoJson WiFiManager aJSON ESP8266WiFi ESP8266WebServer DNSServer
+    本例子依赖的库：WiFiManager aJSON ESP8266WiFi ESP8266WebServer DNSServer
 */
 #include <FS.h>                   //this needs to be first, or it all crashes and burns...
 #include <ESP8266WiFi.h>          //https://github.com/esp8266/Arduino
@@ -13,7 +13,7 @@
 #include <DNSServer.h>
 #include <ESP8266WebServer.h>
 #include <WiFiManager.h>          //https://github.com/tzapu/WiFiManager
-#include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
+//#include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
 #include <aJSON.h>
 
 // start reading from the first byte (address 0) of the EEPROM
@@ -37,7 +37,6 @@ int pins[4] = {D5,D6,D7,D8};
 int state[4] = {HIGH,HIGH,HIGH,HIGH};
 int arr_len = sizeof(pins)/sizeof(pins[0]);
 String filepath="/config.json";
-byte value;
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);
@@ -45,7 +44,7 @@ void setup() {
   Serial.println("\n\u7a0b\u5e8f\u521d\u59cb\u5316....");
   
   //clean FS, for testing
-  //格式化文件系统，如果打开此句，则每次启动都需要重新配网
+  //格式化文件系统
   //SPIFFS.format();
 
   //读取配置文件中的设备id和apikey
@@ -53,14 +52,8 @@ void setup() {
   Serial.println("read config file:\ndevice_id.length:");
   Serial.println(strlen(device_id));
   initAutoConnect();
-  for(int i=0;i<strlen(device_id);i++){
-    DEVICEID += device_id[i];
-    }
-  for(int i=0;i<strlen(api_key);i++){
-  APIKEY += api_key[i];
-  }
-  DEVICEID.trim();
-  APIKEY.trim();
+  DEVICEID=String(device_id);
+  APIKEY=String(api_key);
   Serial.println("connected ... read config file:\nDEVICEID:"+DEVICEID+",APIKEY:"+APIKEY);
   //默认输出关闭电频
   for(int i=0;i<arr_len;i++){
@@ -139,10 +132,18 @@ void offlineConnect(){
   }
   }
 void loginFail(){
-  if(login_status==1&&millis()-first_login_time>20000){
+  if(login_status==1&&millis()-first_login_time>30000){
     //登录超过20秒还未成功，则登录失败，删除原先配置
     login_status=3;
     cleanConfigFile();
+    device_id[0]='\0';
+    api_key[0]= '\0';
+    Serial.println("read config file:\ndevice_id.length:");
+    Serial.println(strlen(device_id));
+    initAutoConnect();
+    DEVICEID=String(device_id);
+    APIKEY=String(api_key);
+    login_status==0;
     }
   }  
 //callback notifying us of the need to save config
@@ -166,20 +167,13 @@ void initReadFile(){
         std::unique_ptr<char[]> buf(new char[size]);
 
         configFile.readBytes(buf.get(), size);
-        StaticJsonDocument<200> json; //声明一个JsonDocument对象
-        // DynamicJsonDocument doc(200); //声明一个JsonDocument对象
-    
-        DeserializationError error = deserializeJson(json, buf.get()); //反序列化JSON数据
-        if (!error) {//如果序列化成功
-          Serial.println("\nparsed json:");
-          Serial.println();
-          serializeJsonPretty(json, Serial); //序列化JSON数据（展开形式），并从Serial输出
-          strcpy(device_id, json["device_id"]);
-          strcpy(api_key, json["api_key"]);
-
-        } else {
-          Serial.println("failed to load json config");
-        }
+        aJsonObject *json1 = aJson.parse(buf.get());
+        aJsonObject* id = aJson.getObjectItem(json1, "device_id");
+        aJsonObject* key = aJson.getObjectItem(json1, "api_key");
+        String d_id=id->valuestring;
+        String d_key=key->valuestring;
+        strcpy(device_id, d_id.c_str());
+        strcpy(api_key, d_key.c_str());
         configFile.close();
       }
     }
@@ -245,19 +239,20 @@ void initAutoConnect(){
   //save the custom parameters to FS
   if (shouldSaveConfig) {
     Serial.println("saving config");
-    StaticJsonDocument<200> json; //声明一个JsonDocument对象
-    // DynamicJsonDocument doc(200); //声明一个JsonDocument对象
-    json["device_id"] = device_id;
-    json["api_key"] = api_key;
 
-    File configFile = SPIFFS.open(filepath, "w");
+    aJsonObject *json = aJson.createObject();
+    aJson.addStringToObject(json, "device_id", device_id);
+    aJson.addStringToObject(json, "api_key", api_key);
+    char* jsonString = aJson.print(json);
+    if (jsonString != NULL) {
+      Serial.println(jsonString);
+      File configFile = SPIFFS.open(filepath, "w");
     if (!configFile) {
       Serial.println("failed to open config file for writing");
     }
-    serializeJson(json, configFile); //序列化JSON数据（压缩形式），并从Serial输出
-    serializeJsonPretty(json, Serial); //序列化JSON数据（展开形式），并从Serial输出
-    Serial.println();
+    configFile.write((uint8_t *)jsonString, strlen(jsonString));
     configFile.close();
+    }
     //end save
   }
   Serial.println("\nlocal ip");
@@ -309,12 +304,6 @@ void cleanConfigFile(){
       SPIFFS.remove(filepath);
       }}
     Serial.println("clean config.json end");
-    delay(1000);
-    ESP.eraseConfig();
-    delay(1000);
-    ESP.reset();
-    delay(1000);
-    ESP.restart();
 }
 void checkIn() {
     String msg = "{\"M\":\"checkin\",\"ID\":\"" + DEVICEID + "\",\"K\":\"" + APIKEY + "\"}\n";
