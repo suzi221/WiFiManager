@@ -536,8 +536,15 @@ void WiFiManager::handleWifi(boolean scan) {
       page += "<br/>";
     }
   }
-
-  page += FPSTR(HTTP_FORM_START);
+  String start_form=FPSTR(HTTP_FORM_START);
+  if (WiFi.SSID() != "") {//添加上次保存的WiFi密码
+    start_form.replace("{ssid}", WiFi.SSID());
+    }
+	else start_form.replace("{ssid}", "");
+  if(WiFi.psk()!=""){
+	start_form.replace("{password}", WiFi.psk());
+  }else start_form.replace("{password}", "");
+  page += start_form;
   char parLength[5];
   // add the extra parameters to the form
   for (int i = 0; i < _paramsCount; i++) {
@@ -611,11 +618,12 @@ void WiFiManager::handleWifi(boolean scan) {
 /** Handle the WLAN save form and redirect to WLAN config page again */
 void WiFiManager::handleWifiSave() {
   DEBUG_WM(F("WiFi save"));
-
+  String content="";
   //SAVE/connect here
   _ssid = server->arg("s").c_str();
   _pass = server->arg("p").c_str();
-
+  content+="<br/>WIFI SSID:"+_ssid;
+  content+="<br/>WIFI PASSWORD:"+_ssid;
   //parameters
   for (int i = 0; i < _paramsCount; i++) {
     if (_params[i] == NULL) {
@@ -628,6 +636,8 @@ void WiFiManager::handleWifiSave() {
     DEBUG_WM(F("Parameter"));
     DEBUG_WM(_params[i]->getID());
     DEBUG_WM(value);
+	String name=_params[i]->getID();
+	content+="<br/>"+name+":"+value;
   }
 
   if (server->arg("ip") != "") {
@@ -656,7 +666,9 @@ void WiFiManager::handleWifiSave() {
   page += FPSTR(HTTP_STYLE);
   page += _customHeadElement;
   page += FPSTR(HTTP_HEADER_END);
-  page += FPSTR(HTTP_SAVED);
+  String html=FPSTR(HTTP_SAVED);
+  html.replace("{c}",content);
+  page += html;
   page += FPSTR(HTTP_END);
 
   server->sendHeader("Content-Length", String(page.length()));

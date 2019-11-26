@@ -15,6 +15,8 @@
 #include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
 #include <aJSON.h>
 
+// start reading from the first byte (address 0) of the EEPROM
+int address = 0;
 //define your default values here, if there are different values in config.json, they are overwritten.
 char device_id[10]="";
 char api_key[20] = "";
@@ -25,16 +27,16 @@ bool shouldSaveConfig = false;
 
 unsigned long lastCheckInTime = 0; //记录上次报到时间
 const unsigned long postingInterval = 40000; // 每隔40秒向服务器报到一次
-unsigned long firstLoginTime = 0; //记录第一次登录时间
 const char* host = "www.bigiot.net";
 const int httpPort = 8181;
 bool isOffline=false;//是否掉线，用来记录是否掉线，掉线之后重新连接需要注销账户再登录 
-int login_status=false;//登录状态，0未登录 1已登录 2登录失败
+int login_status=0; //登录状态 0未登录 1登录中 2已登录 3登录失败 
+unsigned long first_login_time = 0;//首次登录时间
 int pins[4] = {D5,D6,D7,D8};
 int state[4] = {HIGH,HIGH,HIGH,HIGH};
 int arr_len = sizeof(pins)/sizeof(pins[0]);
 String filepath="/config.json";
-
+byte value;
 void setup() {
   // put your setup code here, to run once:
   Serial.begin(115200);
@@ -91,14 +93,26 @@ void loop() {
     delay(2000);
     checkIn();
   }
-  if(millis()-firstLoginTime>20)
-    login_status=2;
+  if(login_status==1&&millis()-first_login_time>20000){
+    //登录超过20秒还未成功，则登录失败，删除原先配置
+    login_status=3;
+    cleanConfigFile();
+    }
   if(login_status==0){
+    login_status=1;
+    Serial.println("first login");
     checkOut();
     delay(1000);
     checkIn();
-    firstLoginTime=millis();
+    delay(1000);
+    first_login_time=millis();
+    lastCheckInTime=millis();
     }
+    if(login_status==1&&millis() - lastCheckInTime >5000){
+      //首次登录后，每5s发送一次登录指令
+      checkIn();
+      lastCheckInTime=millis();
+      }
   if(millis() - lastCheckInTime > postingInterval || lastCheckInTime==0) {
     checkIn();
   }
@@ -107,7 +121,7 @@ void loop() {
   if (client.available()) {
     String inputString = client.readStringUntil('\n');
     inputString.trim();
-    Serial.println(inputString);
+    Serial.println("bigiot say:"+inputString);
     int len = inputString.length()+1;
     if(inputString.startsWith("{") && inputString.endsWith("}")){
       char jsonString[len];
@@ -139,12 +153,14 @@ void initReadFile(){
         std::unique_ptr<char[]> buf(new char[size]);
 
         configFile.readBytes(buf.get(), size);
-        DynamicJsonBuffer jsonBuffer;
-        JsonObject& json = jsonBuffer.parseObject(buf.get());
-        json.printTo(Serial);
-        if (json.success()) {
-          Serial.println("\nparsed json");
-          
+        StaticJsonDocument<200> json; //声明一个JsonDocument对象
+        // DynamicJsonDocument doc(200); //声明一个JsonDocument对象
+    
+        DeserializationError error = deserializeJson(json, buf.get()); //反序列化JSON数据
+        if (!error) {//如果序列化成功
+          Serial.println("\nparsed json:");
+          Serial.println();
+          serializeJsonPretty(json, Serial); //序列化JSON数据（展开形式），并从Serial输出
           strcpy(device_id, json["device_id"]);
           strcpy(api_key, json["api_key"]);
 
@@ -166,7 +182,6 @@ void initAutoConnect(){
   WiFiManagerParameter custom_device_id("device_id", "\u8d1d\u58f3\u8bbe\u5907 ID", device_id, 10);
   WiFiManagerParameter custom_api_key("api_key", "\u8d1d\u58f3\u8bbe\u5907 APIKEY", api_key, 20);
 
-  //WiFiManager
   //Local intialization. Once its business is done, there is no need to keep it around
   WiFiManager wifiManager;
 
@@ -199,11 +214,11 @@ void initAutoConnect(){
   //if it does not connect it starts an access point with the specified name
   //here  "AutoConnectAP"
   //and goes into a blocking loop awaiting configuration
-  if (!wifiManager.autoConnect("ESP8266AutoConnect", "12345678")) {
+  if (!wifiManager.autoConnect("esp8266_connect_Bigiot", "")) {
     Serial.println("failed to connect and hit timeout");
     delay(3000);
     //reset and try again, or maybe put it to deep sleep
-    ESP.reset();
+    ESP.restart();
     delay(5000);
   }
 
@@ -217,8 +232,8 @@ void initAutoConnect(){
   //save the custom parameters to FS
   if (shouldSaveConfig) {
     Serial.println("saving config");
-    DynamicJsonBuffer jsonBuffer;
-    JsonObject& json = jsonBuffer.createObject();
+    StaticJsonDocument<200> json; //声明一个JsonDocument对象
+    // DynamicJsonDocument doc(200); //声明一个JsonDocument对象
     json["device_id"] = device_id;
     json["api_key"] = api_key;
 
@@ -226,9 +241,9 @@ void initAutoConnect(){
     if (!configFile) {
       Serial.println("failed to open config file for writing");
     }
-
-    json.printTo(Serial);
-    json.printTo(configFile);
+    serializeJson(json, configFile); //序列化JSON数据（压缩形式），并从Serial输出
+    serializeJsonPretty(json, Serial); //序列化JSON数据（展开形式），并从Serial输出
+    Serial.println();
     configFile.close();
     //end save
   }
@@ -258,7 +273,10 @@ void processMessage(aJsonObject *msg){
           digitalWrite(pins[i], state[i]);
         }
         sayToClient(F_C_ID,"LED All off!");    
-      }else{
+      }else if(C=="reset"){
+        cleanConfigFile();
+        }
+      else{
         int pin = C.toInt();
         if(pin > 0 && pin <= arr_len){
           pin--;
@@ -267,24 +285,39 @@ void processMessage(aJsonObject *msg){
         }
         sayToClient(F_C_ID,"LED pin:"+pin); 
       }
-    }
-    else if(M=="checkinok")
-     login_status=1;
+    }else if(M == "checkinok"){
+      login_status=2;
+      }
 }
-
+void cleanConfigFile(){
+  if (SPIFFS.begin()) {
+    Serial.println("clean config.json begin");
+    if (SPIFFS.exists(filepath)) {
+      SPIFFS.remove(filepath);
+      }}
+    Serial.println("clean config.json end");
+    delay(1000);
+    ESP.eraseConfig();
+    delay(1000);
+    ESP.reset();
+    delay(1000);
+    ESP.restart();
+}
 void checkIn() {
     String msg = "{\"M\":\"checkin\",\"ID\":\"" + DEVICEID + "\",\"K\":\"" + APIKEY + "\"}\n";
     client.print(msg);
-    Serial.println(msg);
+    Serial.println("say to bigiot (checkin):"+msg);
     lastCheckInTime = millis(); 
 }
 //{"M":"checkout","ID":"xx1","K":"xx2"}\n
 void checkOut() {
     String msg = "{\"M\":\"checkout\",\"ID\":\"" + DEVICEID + "\",\"K\":\"" + APIKEY + "\"}\n";
     client.print(msg);
+     Serial.println("say to bigiot:"+msg);
 }
 void sayToClient(String client_id, String content){
   String msg = "{\"M\":\"say\",\"ID\":\"" + client_id + "\",\"C\":\"" + content + "\"}\n";
   client.print(msg);
+  Serial.println("say to bigiot:"+msg);
   lastCheckInTime = millis();
 }
