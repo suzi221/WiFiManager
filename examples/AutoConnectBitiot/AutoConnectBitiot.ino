@@ -119,6 +119,8 @@ void tryLogin(){
       //首次登录后，每5s发送一次登录指令
       checkIn();
       lastCheckInTime=millis();
+      delay(1000);
+      queryStatus();
       }
   }
 void offlineConnect(){
@@ -133,7 +135,7 @@ void offlineConnect(){
   }
 void loginFail(){
   if(login_status==1&&millis()-first_login_time>30000){
-    //登录超过20秒还未成功，则登录失败，删除原先配置
+    //登录超过30秒还未成功，则登录失败，删除原先配置
     login_status=3;
     cleanConfigFile();
     device_id[0]='\0';
@@ -284,18 +286,13 @@ void processMessage(aJsonObject *msg){
       }else if(C=="reset"){
         cleanConfigFile();
         }
-      else{
-        int pin = C.toInt();
-        if(pin > 0 && pin <= arr_len){
-          pin--;
-          state[pin] = !state[pin];
-          digitalWrite(pins[pin], state[pin]);
-        }
-        sayToClient(F_C_ID,"LED pin:"+pin); 
-      }
-    }else if(M == "checkinok"){
+    }
+    else if(M == "checkinok" || M == "checked"){
       login_status=2;
       }
+    else if(M == "connected"){
+        login_status=1;
+        }
 }
 void cleanConfigFile(){
   if (SPIFFS.begin()) {
@@ -305,10 +302,17 @@ void cleanConfigFile(){
       }}
     Serial.println("clean config.json end");
 }
+//{"M":"status"}
+void queryStatus() {
+    String msg = "{\"M\":\"t\"}\n";
+    client.print(msg);
+    Serial.println("say to bigiot:"+msg);
+    lastCheckInTime = millis(); 
+}
 void checkIn() {
     String msg = "{\"M\":\"checkin\",\"ID\":\"" + DEVICEID + "\",\"K\":\"" + APIKEY + "\"}\n";
     client.print(msg);
-    Serial.println("say to bigiot (checkin):"+msg);
+    Serial.println("say to bigiot:"+msg);
     lastCheckInTime = millis(); 
 }
 //{"M":"checkout","ID":"xx1","K":"xx2"}\n
