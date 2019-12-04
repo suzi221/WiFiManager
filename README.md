@@ -1,3 +1,10 @@
+本项目在 [tzapu/WiFiManager](https://github.com/tzapu/WiFiManager) 基础上修改，并新增两个自动连接贝壳物联的例子，欢迎大家下载学习，并给出改进
+### 如何安装
+下载本代码，放到Arduino的库文件夹中，打开示例代码即可使用
+## 快速开始
+安装好后打开示例代码AutoConnectBigiot或者AutoConnectBigiotUpdate，编译烧写进ESP8266即可运行
+
+以下为原项目的描述：
 ## Current development going on here :arrow_right: [Development Branch](https://github.com/tzapu/WiFiManager/tree/development)
 
 # WiFiManager
