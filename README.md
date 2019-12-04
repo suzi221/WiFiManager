@@ -1,4 +1,4 @@
-本项目在（https://github.com/tzapu/WiFiManager）基础上修改，并新增两个自动连接贝壳物联的例子，欢迎大家下载学习，并给出改进
+本项目在 [tzapu/WiFiManager](https://github.com/tzapu/WiFiManager) 基础上修改，并新增两个自动连接贝壳物联的例子，欢迎大家下载学习，并给出改进
 ### 如何安装
 下载本代码，放到Arduino的库文件夹中，打开示例代码即可使用
 ## 快速开始
